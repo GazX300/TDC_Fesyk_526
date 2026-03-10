@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import signal, fft
+import os
 
 #варіант 7
 n = 500
@@ -136,3 +137,86 @@ plot_signal(Dt_values, snr_values,
             "Залежність SNR від кроку дискретизації",
             "Крок дискретизації",
             "SNR")
+
+all_quantized_signals = []
+all_variances = []
+all_snr_values = []
+
+signal_to_quantize = filtered_signal
+
+for M in [4, 16, 64, 256]:
+
+    bits_list = []
+
+    delta = (np.max(signal_to_quantize) - np.min(signal_to_quantize)) / (M - 1)
+
+    # Квантування сигналу
+    quantize_signal = delta * np.round(signal_to_quantize / delta)
+    all_quantized_signals.append(quantize_signal)
+
+    quantize_levels = np.arange(np.min(quantize_signal), np.max(quantize_signal) + delta / 2, delta)
+    quantize_bit_dec = np.arange(0, M)
+
+    num_bits = int(np.log2(M))
+    quantize_bit_bin = [format(bits, f'0{num_bits}b') for bits in quantize_bit_dec]
+
+    quantize_table = np.c_[quantize_levels[:M], quantize_bit_bin[:M]]
+
+    fig_table, ax_table = plt.subplots(figsize=(14 / 2.54, M / 2.54))
+    table = ax_table.table(cellText=quantize_table, colLabels=['Значення сигналу', 'Кодова послідовність'],
+                           loc='center')
+    table.set_fontsize(14)
+    table.scale(1, 2)
+    ax_table.axis('off')
+    fig_table.savefig(f'./figures/Таблиця квантування для {M} рівнів.png', dpi=600)
+    plt.close(fig_table)
+
+    bits_stream = []
+    for signal_value in quantize_signal:
+        for index, value in enumerate(quantize_levels[:M]):
+            if np.round(np.abs(signal_value - value), 0) == 0:
+                bits_stream.append(quantize_bit_bin[index])
+                break
+
+    binary_data = [int(item) for item in list("".join(bits_stream))]
+
+    fig_bits, ax_bits = plt.subplots(figsize=(21 / 2.54, 14 / 2.54))
+    ax_bits.step(np.arange(0, len(binary_data)), binary_data, linewidth=0.1)
+    ax_bits.set_xlabel("Біти", fontsize=14)
+    ax_bits.set_ylabel("Амплітуда сигналу", fontsize=14)
+    ax_bits.set_title(f"Кодова послідовність сигналу при кількості рівнів квантування {M}", fontsize=14)
+    ax_bits.grid(True)
+    fig_bits.savefig(f'./figures/Кодова послідовність для M={M}.png', dpi=600)
+    plt.close(fig_bits)
+
+    #Розрахунок дисперсі
+    noise = quantize_signal - signal_to_quantize
+    var_q = np.var(noise)
+    snr_q = np.var(signal_to_quantize) / var_q if var_q != 0 else 0
+
+    all_variances.append(var_q)
+    all_snr_values.append(snr_q)
+
+# Побудова графіків
+fig_all, ax_all = plt.subplots(2, 2, figsize=(21 / 2.54, 14 / 2.54))
+M_vals = [4, 16, 64, 256]
+s = 0
+for i in range(2):
+    for j in range(2):
+        ax_all[i][j].plot(time, all_quantized_signals[s], linewidth=1)
+        ax_all[i][j].set_title(f'M = {M_vals[s]}', fontsize=12)
+        ax_all[i][j].grid(True)
+        s += 1
+fig_all.supxlabel("Час (секунди)")
+fig_all.supylabel("Амплітуда сигналу")
+fig_all.tight_layout()
+fig_all.savefig('./figures/Цифрові сигнали з різними рівнями.png', dpi=600)
+plt.close(fig_all)
+
+plot_signal(M_vals, all_variances,
+            "Залежність дисперсії від кількості рівнів квантування",
+            "Кількість рівнів квантування", "Дисперсія")
+
+plot_signal(M_vals, all_snr_values,
+            "Залежність співвідношення сигнал-шум від кількості рівнів квантування",
+            "Кількість рівнів квантування", "ССШ")
