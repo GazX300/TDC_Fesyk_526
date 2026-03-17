@@ -110,9 +110,9 @@ rows = [f'Послідовність {i}' for i in range(1, 9)]
 fig, ax = plt.subplots(figsize=(10, 6))
 ax.axis('off')
 
-table = ax.table(cellText=results, colLabels=headers, rowLabels=rows, loc='center', cellLoc='center', bbox=[0.1, 0.2, 0.8, 0.6])
-table.set_fontsize(12)
-table.scale(1, 2)
+table = ax.table(cellText=results, colLabels=headers, rowLabels=rows, loc='center' , cellLoc='center')
+table.set_fontsize(14)
+table.scale(0.8, 2)
 
 plt.savefig("характеристики.png")
 plt.show()
