@@ -19,32 +19,7 @@ NAME_ORIGINAL_RAW = f"./Sounds/Sound_{SAMPLE_RATE}[Hz]_{SAMPLE_WIDTH}[byte].raw"
 NAME_RESAMPLED_WAV = "./Sounds/Sound_4000[Hz]_2[byte].wav"
 NAME_RESAMPLED_RAW = "./Sounds/Sound_4000[Hz]_2[byte].raw"
 
-NAME_FILTERED_WAV = "./Sounds/Filtered_4000[Hz]_2[byte].wav"
-NAME_FILTERED_RAW = "./Sounds/Filtered_4000[Hz]_2[byte].raw"
-
-
-def sound_recoder(rec, mic):
-    with mic as source:
-        print("Говоріть...")
-        audio = rec.listen(source)
-
-    wav_data = audio.get_wav_data(
-        convert_rate=SAMPLE_RATE,
-        convert_width=SAMPLE_WIDTH
-    )
-    raw_data = audio.get_raw_data(
-        convert_rate=SAMPLE_RATE,
-        convert_width=SAMPLE_WIDTH
-    )
-
-    with open(NAME_ORIGINAL_WAV, "wb") as f:
-        f.write(wav_data)
-
-    with open(NAME_ORIGINAL_RAW, "wb") as f:
-        f.write(raw_data)
-
-
-def wavelet_denoiser(signal, level, mode, wavelet):
+def wavelet_denoiser(signal, level=5, mode='hard', wavelet='db4'):
     coeffs = pywt.wavedec(signal, wavelet, level=level)
     sigma = np.median(np.abs(coeffs[-1])) / 0.6745
     threshold = sigma * np.sqrt(2 * np.log(signal.size))
@@ -59,12 +34,18 @@ def invarince_denoiser(image, **kwargs):
     return denoise_wavelet(image, sigma=0.05, wavelet='db4', mode='soft')
 
 
-def sound_filter():
+def gaussian_kernel(size, sigma):
+    x = np.linspace(-(size // 2), size // 2, size)
+    kernel = np.exp(-0.5 * (x / sigma) ** 2)
+    return kernel / kernel.sum()
+
+
+def run_all_filters():
     data, fs_original = sf.read(NAME_ORIGINAL_WAV)
-    time = np.arange(len(data)) / fs_original
+    if len(data.shape) > 1:
+        data = data[:, 0]
 
     data_2d = data.reshape(1, -1)
-
     invariance = denoise_invariant(data_2d, denoise_function=invarince_denoiser).flatten()
     total_variation = denoise_tv_chambolle(data_2d, weight=0.1, channel_axis=None).flatten()
     bilateral = denoise_bilateral(data_2d, sigma_color=0.05, sigma_spatial=15, channel_axis=None).flatten()
@@ -75,48 +56,45 @@ def sound_filter():
     sf.write("./Sounds/Filtered_Bilateral.wav", bilateral, SAMPLE_RATE)
     sf.write("./Sounds/Filtered_Wavelet.wav", wavelet, SAMPLE_RATE)
 
-    results = [
-        (invariance, "J-Invariance", "Filtered_Invariance.png"),
-        (total_variation, "Total Variation", "Filtered_TV.png"),
-        (bilateral, "Bilateral Filter", "Filtered_Bilateral.png"),
-        (wavelet, "Wavelet Denoising", "Filtered_Wavelet.png")
-    ]
+    cutoff = 4000
+    sos = butter(6, cutoff, btype='low', fs=SAMPLE_RATE, output='sos')
+    filtered_lpf = sosfiltfilt(sos, data)
+    sf.write("./Sounds/Filtered_4000[Hz]_2[byte].wav", filtered_lpf, SAMPLE_RATE)
 
-    for filtered_data, title, filename in results:
-        plt.figure(figsize=(10, 6))
-        plt.plot(time, data, 'b', alpha=0.5, label='Original Clean Signal')
-        plt.plot(time, filtered_data, 'g', linewidth=2, label=title)
+    max_shifts = [0, 1, 3, 5]
+    for n, s in enumerate(max_shifts):
+        sig_filtered = cycle_spin(data, func=wavelet_denoiser, max_shifts=s, shift_steps=5)
+        sf.write(f"./Sounds/Filtered_Shifted_Wavelet_{n}.wav", sig_filtered, SAMPLE_RATE)
 
-        plt.title(title)
-        plt.xlabel("Time")
-        plt.ylabel("Amplitude")
-        plt.legend()
-        plt.grid(True)
-
-        plt.savefig(f"./Sounds/{filename}", dpi=300)
-        plt.close()
+    kernel = gaussian_kernel(size=11, sigma=2)
+    filtered_gaussian = convolve(data, kernel, mode='same')
+    sf.write("./Sounds/Filtered_Gaussian_Filter.wav", filtered_gaussian, SAMPLE_RATE)
 
 
-def to_scientific_pretty(x, precision=2):
-    superscripts = str.maketrans("0123456789-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻")
+
+def to_latex_scientific(x, precision=2):
+    if float(f"{x:.{precision}e}".split('e')[1]) == 0:
+        return f"{round(x, precision)}"
     mantissa, exponent = f"{x:.{precision}e}".split('e')
     mantissa = mantissa.rstrip('0').rstrip('.')
-    return f"{mantissa}·10{str(int(exponent)).translate(superscripts)}"
+    return f"${mantissa} \\cdot 10^{{{int(exponent)}}}$"
 
 
 if __name__ == "__main__":
-    # sound_filter()
-    # recognizer = srec.Recognizer()
-    # microphone = srec.Microphone(device_index=1, sample_rate=SAMPLE_RATE)
-    # sound_recoder(recognizer, microphone)
+
+    #run_all_filters()
 
     results = []
     row = []
     headers = ['MSE', 'MAE', 'RMSE', 'R2', 'D']
 
     data_original, fs_original = sf.read(NAME_ORIGINAL_WAV)
+    if len(data_original.shape) > 1:
+        data_original = data_original[:, 0]
 
     wav_files = glob.glob("./Sounds/*.wav")
+
+    wav_files.sort()
 
     for sounds in wav_files:
         sounds = sounds.replace("\\", "/")
@@ -136,6 +114,8 @@ if __name__ == "__main__":
 
             if type_filter == '4000[Hz] 2[byte]':
                 type_filter = 'Лінійний фільтр 4 кГц'
+            elif 'Shifted Wavelet' in type_filter:
+                type_filter = type_filter.title()
 
             row.append(type_filter)
             data, fs = sf.read(sounds)
@@ -149,21 +129,20 @@ if __name__ == "__main__":
         mae = mean_absolute_error(data_original, data)
         rmse = np.sqrt(mse)
         r2 = r2_score(data_original, data)
-
         D = np.var(data_original - data)
 
         results.append([
-            to_scientific_pretty(mse),
-            to_scientific_pretty(mae),
-            to_scientific_pretty(rmse),
+            to_latex_scientific(mse),
+            to_latex_scientific(mae),
+            to_latex_scientific(rmse),
             str(round(r2, 2)),
-            to_scientific_pretty(D)
+            to_latex_scientific(D)
         ])
 
     n_rows = len(row)
     n_cols = len(headers)
 
-    fig, ax = plt.subplots(figsize=(n_cols * 2.8, n_rows * 0.4))
+    fig, ax = plt.subplots(figsize=(n_cols * 2.5, n_rows * 0.38))
     ax.axis('off')
 
     table = ax.table(
@@ -171,11 +150,15 @@ if __name__ == "__main__":
         rowLabels=row,
         colLabels=headers,
         loc='center',
+        cellLoc='center',
         bbox=[0.08, 0, 1, 1]
     )
 
     table.auto_set_font_size(False)
-    table.set_fontsize(10)
+    table.set_fontsize(11)
 
-    plt.savefig("./Sounds/metrics_table.png", dpi=600, bbox_inches='tight')
+    for position, cell in table.get_celld().items():
+        cell.set_height(0.08)
+
+    plt.savefig("./Sounds/metrics_table.png", dpi=600, bbox_inches='tight') # [cite: 86]
     plt.show()
