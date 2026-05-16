@@ -23,19 +23,30 @@ def getAnchorSearchArea(x, y, anchor, blockSize, searchArea):
                           sx:min(sx + searchArea * 2 + blockSize, w)]
     return anchorSearch
 
+
 def getBlockZone(p, aSearch, tBlock, blockSize):
     px, py = p
     px, py = px - int(blockSize / 2), py - int(blockSize / 2)
     px, py = max(0, px), max(0, py)
     aBlock = aSearch[py:py + blockSize, px:px + blockSize]
+
+    if aBlock.shape != tBlock.shape:
+        padded_block = np.zeros(tBlock.shape, dtype=aBlock.dtype)
+        h_eff, w_eff = aBlock.shape
+        padded_block[:h_eff, :w_eff] = aBlock
+        aBlock = padded_block
+
     try:
         assert aBlock.shape == tBlock.shape
     except Exception as e:
+        print(f"Помилка розмірності: {aBlock.shape} проти {tBlock.shape}")
         print(e)
+
     return aBlock
 
 def getMAD(tBlock, aBlock):
     return np.sum(np.abs(np.subtract(tBlock, aBlock))) / (tBlock.shape[0] * tBlock.shape[1])
+
 
 def getBestMatch(tBlock, aSearch, blockSize):
     step = 4
@@ -69,6 +80,13 @@ def getBestMatch(tBlock, aSearch, blockSize):
     px, py = px - int(blockSize / 2), py - int(blockSize / 2)
     px, py = max(0, px), max(0, py)
     matchBlock = aSearch[py:py + blockSize, px:px + blockSize]
+
+    if matchBlock.shape != tBlock.shape:
+        padded_match = np.zeros(tBlock.shape, dtype=matchBlock.dtype)
+        h_eff, w_eff = matchBlock.shape
+        padded_match[:h_eff, :w_eff] = matchBlock
+        matchBlock = padded_match
+
     return matchBlock
 
 def blockSearchBody(anchor, target, blockSize, searchArea=7):
@@ -176,6 +194,5 @@ def main(anchorFrame, targetFrame, blockSize=16, saveOutput=True, outfile="Resul
 
 if __name__ == '__main__':
     fesyk_fr = random.randint(0, 3000)
-    # Змініть 'sample4.avi' на назву файлу, що лежить у вашій директорії
     fesyk_frame1, fesyk_frame2 = getFrames('sample4.avi', fesyk_fr, fesyk_fr + 1)
     main(fesyk_frame1, fesyk_frame2, saveOutput=True)
