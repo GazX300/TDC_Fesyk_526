@@ -97,7 +97,6 @@ def sound_filter():
         plt.close()
 
 
-# Функція гарного наукового форматування чисел (наприклад, 5.34*10⁻¹⁰)
 def to_scientific_pretty(x, precision=2):
     superscripts = str.maketrans("0123456789-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻")
     mantissa, exponent = f"{x:.{precision}e}".split('e')
@@ -106,7 +105,6 @@ def to_scientific_pretty(x, precision=2):
 
 
 if __name__ == "__main__":
-    # Закоментовано виклики функцій з минулих робіт згідно з інструкцією
     # sound_filter()
     # recognizer = srec.Recognizer()
     # microphone = srec.Microphone(device_index=1, sample_rate=SAMPLE_RATE)
@@ -166,7 +164,7 @@ if __name__ == "__main__":
     n_cols = len(headers)
 
     fig, ax = plt.subplots(figsize=(n_cols * 2.8, n_rows * 0.4))
-    ax.axis('off')  # Сховуємо осі графіка
+    ax.axis('off')
 
     table = ax.table(
         cellText=results,
