@@ -1,23 +1,14 @@
-import speech_recognition as srec
 import soundfile as sf
-from math import gcd
-from scipy.signal import resample_poly, butter, sosfiltfilt, convolve, resample
 import numpy as np
 import matplotlib.pyplot as plt
-from skimage.restoration import denoise_wavelet, denoise_invariant, denoise_tv_chambolle, denoise_bilateral, cycle_spin
 import pywt
+from scipy.signal import convolve
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import glob
 
 SAMPLE_RATE = 48000
 SAMPLE_WIDTH = 2
-DTYPE = np.int16
 
 NAME_ORIGINAL_WAV = f"./Sounds/Sound_{SAMPLE_RATE}[Hz]_{SAMPLE_WIDTH}[byte].wav"
-NAME_ORIGINAL_RAW = f"./Sounds/Sound_{SAMPLE_RATE}[Hz]_{SAMPLE_WIDTH}[byte].raw"
-
-NAME_RESAMPLED_WAV = "./Sounds/Sound_4000[Hz]_2[byte].wav"
-NAME_RESAMPLED_RAW = "./Sounds/Sound_4000[Hz]_2[byte].raw"
 
 def wavelet_denoiser(signal, level=5, mode='hard', wavelet='db4'):
     coeffs = pywt.wavedec(signal, wavelet, level=level)
@@ -30,135 +21,117 @@ def wavelet_denoiser(signal, level=5, mode='hard', wavelet='db4'):
     return denoised_signal[:len(signal)]
 
 
-def invarince_denoiser(image, **kwargs):
-    return denoise_wavelet(image, sigma=0.05, wavelet='db4', mode='soft')
-
-
 def gaussian_kernel(size, sigma):
     x = np.linspace(-(size // 2), size // 2, size)
     kernel = np.exp(-0.5 * (x / sigma) ** 2)
     return kernel / kernel.sum()
 
 
-def run_all_filters():
-    data, fs_original = sf.read(NAME_ORIGINAL_WAV)
-    if len(data.shape) > 1:
-        data = data[:, 0]
-
-    data_2d = data.reshape(1, -1)
-    invariance = denoise_invariant(data_2d, denoise_function=invarince_denoiser).flatten()
-    total_variation = denoise_tv_chambolle(data_2d, weight=0.1, channel_axis=None).flatten()
-    bilateral = denoise_bilateral(data_2d, sigma_color=0.05, sigma_spatial=15, channel_axis=None).flatten()
-    wavelet = wavelet_denoiser(data, level=5, mode='soft', wavelet='db4')
-
-    sf.write("./Sounds/Filtered_Invariance.wav", invariance, SAMPLE_RATE)
-    sf.write("./Sounds/Filtered_Total_Variation.wav", total_variation, SAMPLE_RATE)
-    sf.write("./Sounds/Filtered_Bilateral.wav", bilateral, SAMPLE_RATE)
-    sf.write("./Sounds/Filtered_Wavelet.wav", wavelet, SAMPLE_RATE)
-
-    cutoff = 4000
-    sos = butter(6, cutoff, btype='low', fs=SAMPLE_RATE, output='sos')
-    filtered_lpf = sosfiltfilt(sos, data)
-    sf.write("./Sounds/Filtered_4000[Hz]_2[byte].wav", filtered_lpf, SAMPLE_RATE)
-
-    max_shifts = [0, 1, 3, 5]
-    for n, s in enumerate(max_shifts):
-        sig_filtered = cycle_spin(data, func=wavelet_denoiser, max_shifts=s, shift_steps=5)
-        sf.write(f"./Sounds/Filtered_Shifted_Wavelet_{n}.wav", sig_filtered, SAMPLE_RATE)
-
-    kernel = gaussian_kernel(size=11, sigma=2)
-    filtered_gaussian = convolve(data, kernel, mode='same')
-    sf.write("./Sounds/Filtered_Gaussian_Filter.wav", filtered_gaussian, SAMPLE_RATE)
-
-
-
-def to_latex_scientific(x, precision=2):
-    if float(f"{x:.{precision}e}".split('e')[1]) == 0:
-        return f"{round(x, precision)}"
-    mantissa, exponent = f"{x:.{precision}e}".split('e')
-    mantissa = mantissa.rstrip('0').rstrip('.')
-    return f"${mantissa} \\cdot 10^{{{int(exponent)}}}$"
-
-
 if __name__ == "__main__":
-
-    #run_all_filters()
-
-    results = []
-    row = []
-    headers = ['MSE', 'MAE', 'RMSE', 'R2', 'D']
-
     data_original, fs_original = sf.read(NAME_ORIGINAL_WAV)
     if len(data_original.shape) > 1:
         data_original = data_original[:, 0]
 
-    wav_files = glob.glob("./Sounds/*.wav")
+    P_signal = np.mean(data_original ** 2)
 
-    wav_files.sort()
+    snr_range = np.arange(-10, 21, 1)
 
-    for sounds in wav_files:
-        sounds = sounds.replace("\\", "/")
+    mse_wt_all, mse_gf_all = [], []
+    mae_wt_all, mae_gf_all = [], []
+    rmse_wt_all, rmse_gf_all = [], []
+    r2_wt_all, r2_gf_all = [], []
+    d_wt_all, d_gf_all = [], []
 
-        if sounds == NAME_ORIGINAL_WAV.replace("\\", "/"):
-            continue
+    plot_snr = []
+    plot_mse_wt, plot_mse_gf = [], []
 
-        elif sounds == NAME_RESAMPLED_WAV.replace("\\", "/"):
-            row.append('Ресемпл 4 кГц')
-            data, fs = sf.read(sounds)
-            data = resample(data, len(data_original))
+    kernel = gaussian_kernel(size=11, sigma=2)
 
-        else:
-            type_filter = sounds.replace('./Sounds/Filtered_', '')
-            type_filter = type_filter.replace('.wav', '')
-            type_filter = type_filter.replace('_', ' ')
+    for snr_db in snr_range:
+        P_noise = P_signal / (10 ** (snr_db / 10))
 
-            if type_filter == '4000[Hz] 2[byte]':
-                type_filter = 'Лінійний фільтр 4 кГц'
-            elif 'Shifted Wavelet' in type_filter:
-                type_filter = type_filter.title()
+        sigma_noise = np.sqrt(P_noise)
 
-            row.append(type_filter)
-            data, fs = sf.read(sounds)
+        t_mse_wt, t_mse_gf = [], []
+        t_mae_wt, t_mae_gf = [], []
+        t_rmse_wt, t_rmse_gf = [], []
+        t_r2_wt, t_r2_gf = [], []
+        t_d_wt, t_d_gf = [], []
 
-        if len(data) > len(data_original):
-            data = data[:len(data_original)]
-        elif len(data) < len(data_original):
-            data = np.pad(data, (0, len(data_original) - len(data)), 'constant')
+        for _ in range(5):
+            noise = np.random.normal(0, sigma_noise, len(data_original))
+            data_noisy = data_original + noise
 
-        mse = mean_squared_error(data_original, data)
-        mae = mean_absolute_error(data_original, data)
-        rmse = np.sqrt(mse)
-        r2 = r2_score(data_original, data)
-        D = np.var(data_original - data)
+            filtered_wt = wavelet_denoiser(data_noisy, level=5, mode='soft', wavelet='db4')
+            filtered_gf = convolve(data_noisy, kernel, mode='same')
 
-        results.append([
-            to_latex_scientific(mse),
-            to_latex_scientific(mae),
-            to_latex_scientific(rmse),
-            str(round(r2, 2)),
-            to_latex_scientific(D)
-        ])
+            mse_wt = mean_squared_error(data_original, filtered_wt)
+            t_mse_wt.append(mse_wt)
+            t_mae_wt.append(mean_absolute_error(data_original, filtered_wt))
+            t_rmse_wt.append(np.sqrt(mse_wt))
+            t_r2_wt.append(r2_score(data_original, filtered_wt))
+            t_d_wt.append(np.var(data_original - filtered_wt))
 
-    n_rows = len(row)
-    n_cols = len(headers)
+            mse_gf = mean_squared_error(data_original, filtered_gf)
+            t_mse_gf.append(mse_gf)
+            t_mae_gf.append(mean_absolute_error(data_original, filtered_gf))
+            t_rmse_gf.append(np.sqrt(mse_gf))
+            t_r2_gf.append(r2_score(data_original, filtered_gf))
+            t_d_gf.append(np.var(data_original - filtered_gf))
 
-    fig, ax = plt.subplots(figsize=(n_cols * 2.5, n_rows * 0.38))
-    ax.axis('off')
+            plot_snr.append(snr_db)
+            plot_mse_wt.append(mse_wt)
+            plot_mse_gf.append(mse_gf)
 
-    table = ax.table(
-        cellText=results,
-        rowLabels=row,
-        colLabels=headers,
-        loc='center',
-        cellLoc='center',
-        bbox=[0.08, 0, 1, 1]
-    )
+        mse_wt_all.append(np.mean(t_mse_wt))
+        mse_gf_all.append(np.mean(t_mse_gf))
+        mae_wt_all.append(np.mean(t_mae_wt))
+        mae_gf_all.append(np.mean(t_mae_gf))
+        rmse_wt_all.append(np.mean(t_rmse_wt))
+        rmse_gf_all.append(np.mean(t_rmse_gf))
+        r2_wt_all.append(np.mean(t_r2_wt))
+        r2_gf_all.append(np.mean(t_r2_gf))
+        d_wt_all.append(np.mean(t_d_wt))
+        d_gf_all.append(np.mean(t_d_gf))
 
-    table.auto_set_font_size(False)
-    table.set_fontsize(11)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
-    for position, cell in table.get_celld().items():
-        cell.set_height(0.08)
+    axes[0].scatter(plot_snr, plot_mse_wt, color='blue', alpha=0.15, label="Окремі значення MSE (WT)")
+    axes[0].scatter(plot_snr, plot_mse_gf, color='orange', alpha=0.15, label="Окремі значення MSE (GF)")
 
-    plt.savefig("./Sounds/metrics_table.png", dpi=600, bbox_inches='tight') # [cite: 86]
+    axes[0].plot(snr_range, mse_wt_all, color='blue', linewidth=2, label="Середнє MSE WT")
+    axes[0].plot(snr_range, mse_gf_all, color='orange', linewidth=2, label="Середнє MSE GF")
+
+    axes[0].set_title("Лінійний масштаб")
+    axes[0].set_xlabel("SNR (дБ)")
+    axes[0].set_ylabel("MSE")
+    axes[0].set_xticks(np.arange(-10, 21, 2))
+    axes[0].grid(True, linestyle='--', alpha=0.7)
+    axes[0].legend()
+
+    axes[1].scatter(plot_snr, plot_mse_wt, color='blue', alpha=0.15, label="Окремі значення MSE (WT)")
+    axes[1].scatter(plot_snr, plot_mse_gf, color='orange', alpha=0.15, label="Окремі значення MSE (GF)")
+
+    axes[1].plot(snr_range, mse_wt_all, color='blue', linewidth=2, label="Середня MSE WT")
+    axes[1].plot(snr_range, mse_gf_all, color='orange', linewidth=2, label="Середнє MSE GF")
+
+    axes[1].set_yscale('log')
+    axes[1].set_title("Логарифмічний масштаб")
+    axes[1].set_xlabel("SNR (дБ)")
+    axes[1].set_ylabel("MSE (Log Scale)")
+    axes[1].set_xticks(np.arange(-10, 21, 2))
+    axes[1].grid(True, which="both", linestyle='--', alpha=0.7)
+    axes[1].legend()
+
+    plt.tight_layout()
+
+    plt.savefig("./Sounds/snr_vs_mse_comparison.png", dpi=600, bbox_inches='tight')
     plt.show()
+
+    print("\nПорівняльна таблиця завадостійкості (Вибрані опорні точки):")
+    print(f"{'SNR (дБ)':<10} | {'MSE Wavelet':<15} | {'MSE Gaussian':<15} | {'R2 Wavelet':<12} | {'R2 Gaussian':<12}")
+    print("-" * 75)
+    for idx, snr_val in enumerate(snr_range):
+        if snr_val in [-10, -5, 0, 5, 10, 15, 20]:  
+            print(
+                f"{snr_val:<10} | {mse_wt_all[idx]:<15.3e} | {mse_gf_all[idx]:<15.3e} | {r2_wt_all[idx]:<12.4f} | {r2_gf_all[idx]:<12.4f}")
