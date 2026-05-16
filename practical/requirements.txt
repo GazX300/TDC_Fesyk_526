@@ -4,3 +4,4 @@ matplotlib
 speechrecognition
 pyaudio
 soundfile
+scikit-learn

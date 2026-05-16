@@ -1,11 +1,13 @@
 import speech_recognition as srec
 import soundfile as sf
 from math import gcd
-from scipy.signal import resample_poly, butter, sosfiltfilt
+from scipy.signal import resample_poly, butter, sosfiltfilt, convolve, resample
 import numpy as np
 import matplotlib.pyplot as plt
-from skimage.restoration import denoise_wavelet, denoise_invariant, denoise_tv_chambolle, denoise_bilateral
+from skimage.restoration import denoise_wavelet, denoise_invariant, denoise_tv_chambolle, denoise_bilateral, cycle_spin
 import pywt
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import glob
 
 SAMPLE_RATE = 48000
 SAMPLE_WIDTH = 2
@@ -22,7 +24,6 @@ NAME_FILTERED_RAW = "./Sounds/Filtered_4000[Hz]_2[byte].raw"
 
 
 def sound_recoder(rec, mic):
-
     with mic as source:
         print("Говоріть...")
         audio = rec.listen(source)
@@ -31,7 +32,6 @@ def sound_recoder(rec, mic):
         convert_rate=SAMPLE_RATE,
         convert_width=SAMPLE_WIDTH
     )
-
     raw_data = audio.get_raw_data(
         convert_rate=SAMPLE_RATE,
         convert_width=SAMPLE_WIDTH
@@ -44,9 +44,7 @@ def sound_recoder(rec, mic):
         f.write(raw_data)
 
 
-
 def wavelet_denoiser(signal, level, mode, wavelet):
-
     coeffs = pywt.wavedec(signal, wavelet, level=level)
     sigma = np.median(np.abs(coeffs[-1])) / 0.6745
     threshold = sigma * np.sqrt(2 * np.log(signal.size))
@@ -56,9 +54,10 @@ def wavelet_denoiser(signal, level, mode, wavelet):
     denoised_signal = pywt.waverec(denoised_coeffs, wavelet)
     return denoised_signal[:len(signal)]
 
-def invarince_denoiser(image, **kwargs):
 
+def invarince_denoiser(image, **kwargs):
     return denoise_wavelet(image, sigma=0.05, wavelet='db4', mode='soft')
+
 
 def sound_filter():
     data, fs_original = sf.read(NAME_ORIGINAL_WAV)
@@ -67,11 +66,8 @@ def sound_filter():
     data_2d = data.reshape(1, -1)
 
     invariance = denoise_invariant(data_2d, denoise_function=invarince_denoiser).flatten()
-
     total_variation = denoise_tv_chambolle(data_2d, weight=0.1, channel_axis=None).flatten()
-
     bilateral = denoise_bilateral(data_2d, sigma_color=0.05, sigma_spatial=15, channel_axis=None).flatten()
-
     wavelet = wavelet_denoiser(data, level=5, mode='soft', wavelet='db4')
 
     sf.write("./Sounds/Filtered_Invariance.wav", invariance, SAMPLE_RATE)
@@ -97,102 +93,91 @@ def sound_filter():
         plt.legend()
         plt.grid(True)
 
-
         plt.savefig(f"./Sounds/{filename}", dpi=300)
-        plt.show()
+        plt.close()
+
+
+# Функція гарного наукового форматування чисел (наприклад, 5.34*10⁻¹⁰)
+def to_scientific_pretty(x, precision=2):
+    superscripts = str.maketrans("0123456789-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻")
+    mantissa, exponent = f"{x:.{precision}e}".split('e')
+    mantissa = mantissa.rstrip('0').rstrip('.')
+    return f"{mantissa}·10{str(int(exponent)).translate(superscripts)}"
 
 
 if __name__ == "__main__":
-    sound_filter()
+    # Закоментовано виклики функцій з минулих робіт згідно з інструкцією
+    # sound_filter()
+    # recognizer = srec.Recognizer()
+    # microphone = srec.Microphone(device_index=1, sample_rate=SAMPLE_RATE)
+    # sound_recoder(recognizer, microphone)
 
-    recognizer = srec.Recognizer()
-    microphone = srec.Microphone(device_index=1, sample_rate=SAMPLE_RATE)
+    results = []
+    row = []
+    headers = ['MSE', 'MAE', 'RMSE', 'R2', 'D']
 
-    sound_recoder(recognizer, microphone)
+    data_original, fs_original = sf.read(NAME_ORIGINAL_WAV)
 
-    #ресемплінг
+    wav_files = glob.glob("./Sounds/*.wav")
 
-    data, fs_original = sf.read(NAME_ORIGINAL_WAV)
+    for sounds in wav_files:
+        sounds = sounds.replace("\\", "/")
 
-    fs_target = 4000
+        if sounds == NAME_ORIGINAL_WAV.replace("\\", "/"):
+            continue
 
-    g = gcd(fs_original, fs_target)
-    up = fs_target // g
-    down = fs_original // g
+        elif sounds == NAME_RESAMPLED_WAV.replace("\\", "/"):
+            row.append('Ресемпл 4 кГц')
+            data, fs = sf.read(sounds)
+            data = resample(data, len(data_original))
 
-    data_resampled = resample_poly(data, up, down)
+        else:
+            type_filter = sounds.replace('./Sounds/Filtered_', '')
+            type_filter = type_filter.replace('.wav', '')
+            type_filter = type_filter.replace('_', ' ')
 
-    sf.write(NAME_RESAMPLED_WAV, data_resampled, fs_target)
+            if type_filter == '4000[Hz] 2[byte]':
+                type_filter = 'Лінійний фільтр 4 кГц'
 
+            row.append(type_filter)
+            data, fs = sf.read(sounds)
 
-    with open(NAME_ORIGINAL_RAW, "rb") as f:
-        raw_bytes = f.read()
+        if len(data) > len(data_original):
+            data = data[:len(data_original)]
+        elif len(data) < len(data_original):
+            data = np.pad(data, (0, len(data_original) - len(data)), 'constant')
 
-    signal = np.frombuffer(raw_bytes, dtype=DTYPE)
+        mse = mean_squared_error(data_original, data)
+        mae = mean_absolute_error(data_original, data)
+        rmse = np.sqrt(mse)
+        r2 = r2_score(data_original, data)
 
-    signal_float = signal.astype(np.float32) / 32768.0
+        D = np.var(data_original - data)
 
-    resampled = resample_poly(signal_float, up, down)
+        results.append([
+            to_scientific_pretty(mse),
+            to_scientific_pretty(mae),
+            to_scientific_pretty(rmse),
+            str(round(r2, 2)),
+            to_scientific_pretty(D)
+        ])
 
-    resampled_int16 = np.int16(resampled * 32767)
+    n_rows = len(row)
+    n_cols = len(headers)
 
-    with open(NAME_RESAMPLED_RAW, "wb") as f:
-        f.write(resampled_int16.tobytes())
+    fig, ax = plt.subplots(figsize=(n_cols * 2.8, n_rows * 0.4))
+    ax.axis('off')  # Сховуємо осі графіка
 
-    #Фільтр
+    table = ax.table(
+        cellText=results,
+        rowLabels=row,
+        colLabels=headers,
+        loc='center',
+        bbox=[0.08, 0, 1, 1]
+    )
 
-    data, fs_original = sf.read(NAME_ORIGINAL_WAV)
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
 
-    if len(data.shape) > 1:
-        data = data[:, 0]
-
-    cutoff = 4000
-    order = 6
-
-    sos = butter(order, cutoff, btype='low', fs=SAMPLE_RATE, output='sos')
-
-    filtered = sosfiltfilt(sos, data)
-
-    sf.write(NAME_FILTERED_WAV, filtered, SAMPLE_RATE)
-
-
-    with open(NAME_ORIGINAL_RAW, "rb") as f:
-        raw_bytes = f.read()
-
-    signal = np.frombuffer(raw_bytes, dtype=DTYPE)
-
-    signal_float = signal.astype(np.float32) / 32768.0
-
-    filtered_raw = sosfiltfilt(sos, signal_float)
-
-    filtered_int16 = np.int16(filtered_raw * 32767)
-
-    with open(NAME_FILTERED_RAW, "wb") as f:
-        f.write(filtered_int16.tobytes())
-
-    #Графіки
-
-    data, fs = sf.read(NAME_ORIGINAL_WAV)
-    time = np.arange(len(data)) / fs
-
-    plt.figure(figsize=(12, 6))
-    plt.plot(time, data, label=f"Оригінал (fs={fs} Гц)")
-
-    data, fs = sf.read(NAME_RESAMPLED_WAV)
-    time = np.arange(len(data)) / fs
-    plt.plot(time, data, label=f"Ресемпл (fs={fs} Гц)")
-
-    data, fs = sf.read(NAME_FILTERED_WAV)
-    time = np.arange(len(data)) / fs
-    plt.plot(time, data, label=f"Фільтрований (LPF {cutoff} Гц)")
-
-    plt.title("Порівняння сигналів у часовій області")
-    plt.xlabel("Час (с)")
-    plt.ylabel("Амплітуда")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-
-    plt.savefig("./Sounds/signals_comparison.png", dpi=300)
-
+    plt.savefig("./Sounds/metrics_table.png", dpi=600, bbox_inches='tight')
     plt.show()
